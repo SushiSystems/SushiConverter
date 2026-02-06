@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import os
-from .logger import log_info, log_warning, log_success
+from .logger import log_info, log_warning, log_success, log_error
 
 class Mish(nn.Module):
     def __init__(self):
@@ -42,6 +42,11 @@ class DarknetParser(nn.Module):
     def __init__(self, cfgfile):
         super(DarknetParser, self).__init__()
         self.blocks = self._parse_cfg(cfgfile)
+        
+        while self.blocks and self.blocks[-1]['type'] == 'contrastive':
+            log_info("Pruning 'contrastive' layer found at the end of the network.")
+            self.blocks.pop()
+            
         self.net_info = self.blocks[0]
         self.width = int(self.net_info.get('width', 416))
         self.height = int(self.net_info.get('height', 416))
@@ -129,6 +134,23 @@ class DarknetParser(nn.Module):
                     module = MaxPoolDark(pool_size, stride)
                 
                 out_filters.append(prev_filters)
+                prev_stride = stride * prev_stride
+                out_strides.append(prev_stride)
+                models.append(module)
+
+            elif block_type == 'avgpool':
+                module = nn.AdaptiveAvgPool2d((1, 1))
+                out_filters.append(prev_filters)
+                out_strides.append(prev_stride)
+                models.append(module)
+
+            elif block_type == 'local_avgpool':
+                pool_size = int(block.get('size', 2))
+                stride = int(block.get('stride', 1))
+                module = nn.AvgPool2d(kernel_size=pool_size, stride=stride, padding=0, count_include_pad=False)
+                
+                out_filters.append(prev_filters)
+                prev_stride = stride * prev_stride
                 out_strides.append(prev_stride)
                 models.append(module)
 
@@ -142,7 +164,7 @@ class DarknetParser(nn.Module):
 
             elif block_type == 'route':
                 layers = block['layers'].split(',')
-                layers = [int(i) if int(i) > 0 else int(i) + len(models) for i in layers]
+                layers = [int(i) if int(i) >= 0 else int(i) + len(models) for i in layers]
                 
                 if 'groups' in block:
                     groups = int(block['groups'])
@@ -150,7 +172,14 @@ class DarknetParser(nn.Module):
                 else:
                     total_filters = 0
                     for l in layers:
-                        total_filters += out_filters[l]
+                        try:
+                            total_filters += out_filters[l]
+                        except IndexError:
+                             log_error(f"DEBUG ERROR: Block {len(models)}, Type {block_type}")
+                             log_error(f"Refers to l={l}, out_filters len={len(out_filters)}")
+                             log_error(f"Original layers: {block['layers']}")
+                             log_error(f"Calculated layers: {layers}")
+                             raise
 
                 out_filters.append(total_filters)
                 prev_filters = total_filters
@@ -163,6 +192,12 @@ class DarknetParser(nn.Module):
                 models.append(nn.Identity())
 
             elif block_type == 'yolo':
+                out_filters.append(prev_filters)
+                out_strides.append(prev_stride)
+                models.append(nn.Identity())
+
+            elif block_type == 'contrastive':
+                log_info("Replacing middle 'contrastive' layer with Identity.")
                 out_filters.append(prev_filters)
                 out_strides.append(prev_stride)
                 models.append(nn.Identity())
@@ -183,13 +218,13 @@ class DarknetParser(nn.Module):
             module = self.models[i]
             block_type = block['type']
 
-            if block_type in ['convolutional', 'maxpool', 'upsample']:
+            if block_type in ['convolutional', 'maxpool', 'upsample', 'local_avgpool', 'avgpool']:
                 x = module(x)
                 outputs[i] = x
             
             elif block_type == 'route':
                 layers = block['layers'].split(',')
-                layers = [int(l) if int(l) > 0 else int(l) + i for l in layers]
+                layers = [int(l) if int(l) >= 0 else int(l) + i for l in layers]
                 
                 if len(layers) == 1:
                     if 'groups' in block:
@@ -210,7 +245,7 @@ class DarknetParser(nn.Module):
             elif block_type == 'shortcut':
                 from_layer = int(block['from'])
                 activation = block.get('activation', 'linear')
-                from_layer = from_layer if from_layer > 0 else from_layer + i
+                from_layer = from_layer if from_layer >= 0 else from_layer + i
                 
                 x1 = outputs[from_layer]
                 x2 = outputs[i - 1]
@@ -247,6 +282,10 @@ class DarknetParser(nn.Module):
         total_len = weights.size
         
         for i, (module, block) in enumerate(zip(self.models, self.blocks[1:])):
+            if block['type'] == 'contrastive':
+                log_info("Reached 'contrastive' layer during weight loading. Stopping further loading.")
+                break
+
             if block['type'] == 'convolutional':
                 conv_layer = module[0]
                 batch_normalize = int(block.get('batch_normalize', 0))
