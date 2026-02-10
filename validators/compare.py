@@ -42,14 +42,15 @@ def validate_conversion(pt_model, onnx_path, input_shape, tolerance=1e-4):
             continue
             
         mae = np.mean(np.abs(p - o))
+        shape_str = f"Shape: {tuple(o.shape)}"
         
         if np.isnan(mae):
-            log_error(f"Output {i} contains NaN values.")
+            log_error(f"Output {i} ({shape_str}) contains NaN values.")
             all_pass = False
         elif mae > tolerance:
-            log_warning(f"Output {i} difference too high: {mae:.6f} > {tolerance}")
+            log_warning(f"Output {i} ({shape_str}) difference too high: {mae:.6f} > {tolerance}")
             all_pass = False
         else:
-            log_success(f"Output {i} validated (MAE: {mae:.6f}).")
+            log_success(f"Output {i} ({shape_str}) validated (MAE: {mae:.6f}).")
             
     return all_pass

@@ -1,6 +1,5 @@
 import sys
 
-# ANSI Escape Codes for Colors
 YELLOW = "\033[93m"
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -19,7 +18,6 @@ def log_success(message):
     print(f"{GREEN}[SUCCESS] {message}{RESET}")
 
 def set_color_mode():
-    # Windows support for ANSI escape codes
     if sys.platform == "win32":
         import os
         os.system("color")

@@ -26,7 +26,7 @@ class MaxPoolDark(nn.Module):
         else:
             padding1 = (self.size - 1) // 2
             padding2 = padding1
-            
+
         if ((x.shape[3] - 1) // self.stride) != ((x.shape[3] + 2 * p - self.size) // self.stride):
             padding3 = (self.size - 1) // 2
             padding4 = padding3 + 1
@@ -38,15 +38,53 @@ class MaxPoolDark(nn.Module):
                          self.size, stride=self.stride)
         return x
 
+class YOLOLayer(nn.Module):
+    def __init__(self, anchors, mask, classes, img_size, no_yolo_layer=False):
+        super(YOLOLayer, self).__init__()
+        self.anchors = [anchors[i] for i in mask]
+        self.classes = classes
+        self.img_size = img_size
+        self.no_yolo_layer = no_yolo_layer
+        self.num_anchors = len(mask)
+
+    def forward(self, x):
+        if self.no_yolo_layer:
+            return x
+
+        B, C, H, W = x.shape
+        x = x.view(B, self.num_anchors, 5 + self.classes, H, W).permute(0, 1, 3, 4, 2).contiguous()
+
+        x[..., 0:2] = torch.sigmoid(x[..., 0:2])
+        x[..., 4:] = torch.sigmoid(x[..., 4:])
+
+        grid_y, grid_x = torch.meshgrid([torch.arange(H, device=x.device), torch.arange(W, device=x.device)], indexing='ij')
+        grid_x = grid_x.view(1, 1, H, W).float()
+        grid_y = grid_y.view(1, 1, H, W).float()
+
+        anchor_w = torch.FloatTensor(self.anchors).view(1, self.num_anchors, 1, 1, 2)[..., 0].to(x.device)
+        anchor_h = torch.FloatTensor(self.anchors).view(1, self.num_anchors, 1, 1, 2)[..., 1].to(x.device)
+
+        stride_x = self.img_size[1] / W
+        stride_y = self.img_size[0] / H
+
+        pred = x.clone()
+        pred[..., 0] = (x[..., 0] + grid_x) * stride_x
+        pred[..., 1] = (x[..., 1] + grid_y) * stride_y
+        pred[..., 2] = torch.exp(x[..., 2]) * anchor_w
+        pred[..., 3] = torch.exp(x[..., 3]) * anchor_h
+
+        return pred.view(B, -1, 5 + self.classes)
+
 class DarknetParser(nn.Module):
-    def __init__(self, cfgfile):
+    def __init__(self, cfgfile, no_yolo_layer=False):
         super(DarknetParser, self).__init__()
+        self.no_yolo_layer = no_yolo_layer
         self.blocks = self._parse_cfg(cfgfile)
-        
+
         while self.blocks and self.blocks[-1]['type'] == 'contrastive':
             log_info("Pruning 'contrastive' layer found at the end of the network.")
             self.blocks.pop()
-            
+
         self.net_info = self.blocks[0]
         self.width = int(self.net_info.get('width', 416))
         self.height = int(self.net_info.get('height', 416))
@@ -132,7 +170,7 @@ class DarknetParser(nn.Module):
                     module = nn.MaxPool2d(kernel_size=pool_size, stride=stride, padding=0)
                 else:
                     module = MaxPoolDark(pool_size, stride)
-                
+
                 out_filters.append(prev_filters)
                 prev_stride = stride * prev_stride
                 out_strides.append(prev_stride)
@@ -148,7 +186,7 @@ class DarknetParser(nn.Module):
                 pool_size = int(block.get('size', 2))
                 stride = int(block.get('stride', 1))
                 module = nn.AvgPool2d(kernel_size=pool_size, stride=stride, padding=0, count_include_pad=False)
-                
+
                 out_filters.append(prev_filters)
                 prev_stride = stride * prev_stride
                 out_strides.append(prev_stride)
@@ -165,7 +203,7 @@ class DarknetParser(nn.Module):
             elif block_type == 'route':
                 layers = block['layers'].split(',')
                 layers = [int(i) if int(i) >= 0 else int(i) + len(models) for i in layers]
-                
+
                 if 'groups' in block:
                     groups = int(block['groups'])
                     total_filters = out_filters[layers[0]] // groups
@@ -192,9 +230,18 @@ class DarknetParser(nn.Module):
                 models.append(nn.Identity())
 
             elif block_type == 'yolo':
+                mask = block['mask'].split(',')
+                mask = [int(x) for x in mask]
+                anchors = block['anchors'].split(',')
+                anchors = [int(x) for x in anchors]
+                anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors), 2)]
+                classes = int(block['classes'])
+                img_size = (self.height, self.width)
+
+                module = YOLOLayer(anchors, mask, classes, img_size, self.no_yolo_layer)
                 out_filters.append(prev_filters)
                 out_strides.append(prev_stride)
-                models.append(nn.Identity())
+                models.append(module)
 
             elif block_type == 'contrastive':
                 log_info("Replacing middle 'contrastive' layer with Identity.")
@@ -221,11 +268,11 @@ class DarknetParser(nn.Module):
             if block_type in ['convolutional', 'maxpool', 'upsample', 'local_avgpool', 'avgpool']:
                 x = module(x)
                 outputs[i] = x
-            
+
             elif block_type == 'route':
                 layers = block['layers'].split(',')
                 layers = [int(l) if int(l) >= 0 else int(l) + i for l in layers]
-                
+
                 if len(layers) == 1:
                     if 'groups' in block:
                         groups = int(block['groups'])
@@ -246,24 +293,27 @@ class DarknetParser(nn.Module):
                 from_layer = int(block['from'])
                 activation = block.get('activation', 'linear')
                 from_layer = from_layer if from_layer >= 0 else from_layer + i
-                
+
                 x1 = outputs[from_layer]
                 x2 = outputs[i - 1]
                 x = x1 + x2
-                
+
                 if activation == 'leaky':
                     x = F.leaky_relu(x, 0.1, inplace=True)
                 outputs[i] = x
 
             elif block_type == 'yolo':
+                x = module(x)
                 yolo_outputs.append(x)
                 outputs[i] = x
-            
+
             else:
                 outputs[i] = x
-        
+
         if len(yolo_outputs) > 0:
-            return yolo_outputs
+            if self.no_yolo_layer:
+                return yolo_outputs
+            return torch.cat(yolo_outputs, 1)
         return x
 
     def load_weights(self, weightfile):
@@ -280,7 +330,7 @@ class DarknetParser(nn.Module):
 
         ptr = 0
         total_len = weights.size
-        
+
         for i, (module, block) in enumerate(zip(self.models, self.blocks[1:])):
             if block['type'] == 'contrastive':
                 log_info("Reached 'contrastive' layer during weight loading. Stopping further loading.")
@@ -289,13 +339,13 @@ class DarknetParser(nn.Module):
             if block['type'] == 'convolutional':
                 conv_layer = module[0]
                 batch_normalize = int(block.get('batch_normalize', 0))
-                
+
                 def load_tensor(param, ptr):
                     numel = param.numel()
                     if ptr + numel > total_len:
                         raise RuntimeError(f"Weight mismatch at layer {i}: expected {numel} more values, but reached EOF. "
                                            f"Check if you are using the correct weights for this .cfg file.")
-                    
+
                     w_data = torch.from_numpy(weights[ptr : ptr + numel]).view_as(param)
                     param.data.copy_(w_data)
                     return ptr + numel
@@ -308,7 +358,7 @@ class DarknetParser(nn.Module):
                     ptr = load_tensor(bn_layer.running_var, ptr)
                 else:
                     ptr = load_tensor(conv_layer.bias, ptr)
-                
+
                 ptr = load_tensor(conv_layer.weight, ptr)
-        
+
         log_success("Weights loaded successfully.")

@@ -44,6 +44,7 @@ def get_args():
     group = parser.add_argument_group('Advanced Flags')
     group.add_argument('--validate', action='store_true', help='Compare PyTorch and ONNX outputs')
     group.add_argument('--no-simplify', action='store_true', help='Skip ONNX optimization step')
+    group.add_argument('--no-yolo-layer', action='store_true', help='Output raw tensors instead of decoded YOLO predictions')
     group.add_argument('--tutorial', action='store_true', help='Show usage examples and exit')
 
     return parser.parse_args()
@@ -57,7 +58,7 @@ def load_model(args):
             log_error("Darknet mode requires a --cfg file.")
             sys.exit(1)
         try:
-            model = DarknetParser(args.cfg)
+            model = DarknetParser(args.cfg, no_yolo_layer=args.no_yolo_layer)
             if args.weights:
                 model.load_weights(args.weights)
             else:
@@ -163,16 +164,25 @@ def main():
             
             if args.validate:
                 source_name = "Darknet" if args.mode == 'darknet' else "PyTorch"
-                log_info(f"Phase 1: Comparing {source_name} and ONNX outputs...")
+                yolo_status = "Raw Tensors" if (args.mode == 'darknet' and args.no_yolo_layer) else "Decoded Boxes"
+                
+                log_info(f"Phase 1: Comparing {source_name} and ONNX outputs ({yolo_status})...")
                 is_valid = validate_conversion(model, final_path, args.shape)
                 
-                log_info("Phase 2: Testing inference with OpenCV DNN...")
+                if args.mode == 'darknet' and not args.no_yolo_layer:
+                    log_warning("YOLO decoding detected. Phase 2 (OpenCV) may fail due to ScatterND/Gather elements.")
+                    log_warning("If Phase 2 fails, consider using --no-yolo-layer for NPU-friendly export.")
+
+                log_info(f"Phase 2: Testing inference with OpenCV DNN ({yolo_status})...")
                 inference_ok = validate_with_opencv(final_path, args.shape)
                 
                 if is_valid and inference_ok:
-                    log_success("All validation phases passed. Model is ready for NPU.")
+                    log_success("All validation phases passed.")
+                elif is_valid:
+                    log_warning("Phase 1 passed, but Phase 2 (OpenCV) failed. This is expected for decoded YOLO layers.")
                 else:
-                    log_warning("Validation completed with some issues. Check the log above.")
+                    log_error("Validation failed.")
+
             print(f"\n" + "="*50)
             print(f"  CONVERSION REPORT")
             print(f"="*50)
@@ -181,7 +191,8 @@ def main():
             print(f"  Input Shape  : {args.shape}")
             
             if args.validate:
-                status = "PASSED" if (is_valid and inference_ok) else "FAILED / WITH WARNINGS"
+                status = "PASSED" if (is_valid and inference_ok) else ("PARTIAL (Phase 1 OK)" if is_valid else "FAILED")
+                print(f"  YOLO Layer   : {yolo_status}")
                 print(f"  Validation   : {status}")
             
             print("="*50 + "\n")

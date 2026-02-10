@@ -20,10 +20,19 @@ class RawNPUHead(nn.Module):
 def export_pytorch_to_onnx(model, input_shape, output_path):
     OPSET_VERSION = 11
     
-    dummy_input = torch.randn(*input_shape, requires_grad=True)
+    dummy_input = torch.randn(*input_shape, requires_grad=False)
     device = next(model.parameters()).device
     dummy_input = dummy_input.to(device)
     
+    model.eval()
+    with torch.no_grad():
+        outputs = model(dummy_input)
+    
+    if isinstance(outputs, (list, tuple)):
+        output_names = [f'output{i}' for i in range(len(outputs))]
+    else:
+        output_names = ['output']
+
     try:
         torch.onnx.export(
             model,
@@ -33,7 +42,7 @@ def export_pytorch_to_onnx(model, input_shape, output_path):
             opset_version=OPSET_VERSION,
             do_constant_folding=True,
             input_names=['input'],
-            output_names=['output'],
+            output_names=output_names,
             dynamic_axes=None,
             verbose=False
         )
