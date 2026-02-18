@@ -1,4 +1,4 @@
-=== Universal ONNX Converter Tutorial ===
+=== SushiConverter Tutorial ===
 
 *** MANDATORY: Environment Setup ***
 Setting up a dedicated environment is REQUIRED for stability.

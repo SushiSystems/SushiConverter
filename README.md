@@ -1,4 +1,4 @@
-# Universal ONNX Converter
+# SushiConverter
 
 Tool to convert Darknet and PyTorch models into ONNX formats optimized for edge devices. It focuses on Opset 11 compatibility and uses static values to ensure stability on restricted hardware.
 

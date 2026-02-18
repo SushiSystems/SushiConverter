@@ -20,7 +20,7 @@ def show_tutorial():
 
 def get_args():
     parser = argparse.ArgumentParser(
-        description="Universal ONNX Converter: Optimize models for NPU deployment.",
+        description="SushiConverter: Optimize models for NPU deployment.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
