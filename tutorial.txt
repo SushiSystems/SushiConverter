@@ -11,21 +11,30 @@ Installation steps:
 
 --- Usage Examples ---
 
-1. Darknet to ONNX (NPU Optimized)
-python main.py --mode darknet --cfg model.cfg --weights model.weights --output model.onnx --shape 1 3 416 416 --validate
+1. Darknet to ONNX
+python main.py --mode darknet --graph model.cfg --weights model.weights --output model.onnx --validate
 
-2. PyTorch to ONNX (NPU Optimized)
-python main.py --mode pytorch --weights model.pt --output model.onnx --shape 1 3 640 640 --validate
+2. PyTorch to ONNX
+python main.py --mode pytorch --weights model.pt --output model.onnx --validate
 
-3. Darknet to PyTorch
-python main.py --mode darknet --cfg model.cfg --weights model.weights --output-mode pytorch --output model.pt
+3. Darknet to PyTorch (.pt)
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode pytorch
+
+4. Darknet to Caffe
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode caffe
+
+5. Standalone Python Source (.py + .pth)
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode source --output standalone_model
+
+6. Weights Only (.pth)
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode pth
 
 Notes:
 - Use --validate to ensure the ONNX model matches the original.
 - Use --no-simplify to disable ONNX model simplification.
-- Use --no-yolo-layer to disable YOLO layers (raw outputs).
+- Use --yolo-layer to include decoded YOLO layers (default is raw tensors).
 - Use --output-mode pytorch to save the model as a PyTorch file.
 - Default export mode is ONNX if not specified.
 - Default shape is 1x3x416x416 if not specified.
 - If exporting without weights, skip the --weights flag; weights will be generated randomly.
-- Opset 11 is enforced on ONNX models for NPU compatibility.
+- Opset 11 is enforced on ONNX models for compatibility.

@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# post_process.py
+# export_pytorch.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,43 +28,46 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import os
-import onnx
-from core.logger import log_info, log_warning, log_success
+import torch
+from core.logger import log_error, log_info, log_success
 
-def optimize_onnx(onnx_path, simplify=True):
+def export_pytorch_to_onnx(model, input_shape, output_path):
     """
-    Applies graph optimizations and NPU patches.
-    @param onnx_path source ONNX file.
-    @param simplify apply onnx-simplifier.
-    @return path to optimized model.
+    Exports PyTorch model via ONNX tracer.
+    @param model PyTorch model.
+    @param input_shape shape for dummy input.
+    @param output_path output location.
+    @return True if export succeeded.
     """
-    TARGET_OPSET = 11
-    TARGET_IR = 7
+    OPSET_VERSION = 11
     
-    model = onnx.load(onnx_path)
+    dummy_input = torch.randn(*input_shape, requires_grad=False)
+    device = next(model.parameters()).device
+    dummy_input = dummy_input.to(device)
     
-    if simplify:
-        try:
-            from onnxsim import simplify as onnx_simplify
-            log_info("Running simplifier...")
-            model, check = onnx_simplify(model)
-        except ImportError:
-            log_warning("onnx-simplifier missing. Skipping.")
+    model.eval()
+    with torch.no_grad():
+        outputs = model(dummy_input)
     
-    if model.ir_version > TARGET_IR:
-        log_info(f"Lowering IR version: {model.ir_version} -> {TARGET_IR}")
-        model.ir_version = TARGET_IR
+    if isinstance(outputs, (list, tuple)):
+        output_names = [f'output{i}' for i in range(len(outputs))]
+    else:
+        output_names = ['output']
 
-    for opset_import in model.opset_import:
-        if opset_import.domain == '' or opset_import.domain == 'ai.onnx':
-            opset_import.version = TARGET_OPSET
-            
-    onnx.save(model, onnx_path)
-    
-    data_file = onnx_path + ".data"
-    if os.path.exists(data_file):
-        os.remove(data_file)
-    
-    log_success("Optimize finished.")
-    return onnx_path
+    try:
+        torch.onnx.export(
+            model,
+            dummy_input,
+            output_path,
+            export_params=True,
+            opset_version=OPSET_VERSION,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=output_names,
+            dynamic_axes=None,
+            verbose=False
+        )
+        return True
+    except Exception as e:
+        log_error(f"Native export failed: {e}")
+        raise e

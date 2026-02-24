@@ -1,20 +1,20 @@
 # SushiConverter
 
-Tool to convert Darknet and PyTorch models into ONNX formats optimized for edge devices. It focuses on Opset 11 compatibility and uses static values to ensure stability on restricted hardware.
+Simple tool to convert and optimize neural network models for deployment. It supports multiple input and output formats with a focus on static shapes and compatibility for edge devices.
 
 ## Features
 
-- Exports models with static value Opset 11 for maximum compatibility.
-- Supports both raw tensor export and export with specific detect layers.
-- Includes validation for all ONNX exports to ensure parity.
-- Supports OpenCV inference for testing raw output ONNX models.
-- Tested primarily on basic darknet tiny models.
-- Can convert Darknet models to PyTorch format (.pt).
-- Designed for edge devices to avoid dynamic operator issues.
+- Converts Darknet (.cfg/.weights) to ONNX, Caffe, PyTorch, and standalone Python source.
+- Converts PyTorch (.pt) models to ONNX.
+- Enforces ONNX Opset 11 for hardware compatibility.
+- Provides standalone source code generation for Darknet models.
+- Includes a numerical validation pipeline to compare output results.
+- Supports raw tensor export or decoded YOLO layers.
+- Optimizes ONNX graphs for NPU deployment.
 
 ## Environment
 
-The use of a virtual environment is strongly recommended for stability.
+A dedicated virtual environment is required for stability. The program is validated with specific library versions listed in the requirements file.
 Recommended Python version: 3.9.25
 
 ## Installation
@@ -24,34 +24,46 @@ pip install -r requirements.txt
 ## Usage
 
 ### Darknet to ONNX
-python main.py --mode darknet --cfg model.cfg --weights model.weights --output model.onnx --shape 1 3 416 416 --validate
+python main.py --mode darknet --graph model.cfg --weights model.weights --output model.onnx --validate
 
 ### PyTorch to ONNX
-python main.py --mode pytorch --weights model.pt --output model.onnx --shape 1 3 640 640 --validate
+python main.py --mode pytorch --weights model.pt --output model.onnx --validate
 
-### Darknet to PyTorch
-python main.py --mode darknet --cfg model.cfg --weights model.weights --output-mode pytorch --output model.pt
+### Darknet to PyTorch (.pt)
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode pytorch --output model.pt
+
+### Darknet to Caffe
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode caffe
+
+### Standalone Python Source (.py + .pth)
+python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode source --output standalone_model
 
 ## Arguments
 
---no-yolo-layer
-Output raw tensors instead of the decoded detection layer.
+--mode
+Input model type (darknet, pytorch, onnx).
 
---no-simplify
-Skip the ONNX simplification pass.
+--graph
+Path to the model graph definition (e.g., .cfg file).
+
+--weights
+Path to the weight file (.weights, .pt, or .pth).
+
+--output-mode
+Target format (onnx, pytorch, caffe, source, pth).
 
 --validate
-Run validation suite and comparison between models.
+Compare source and output results using numerical tests.
+
+--yolo-layer
+Include decoded YOLO predictions in the output. Default is raw tensors.
+
+--no-simplify
+Skip the ONNX simplification step.
 
 --shape
-Specify the input size (e.g. 1 3 416 416).
-
---help
-Show available command line arguments and options.
-
---tutorial
-Display detailed usage examples and a quick start guide.
+Define input shape B C H W (default: 1 3 416 416).
 
 ## Status
 
-This project is a prototype. It has been tested on basic darknet tiny models and is intended for development and testing purposes on edge hardware.
+This project is a prototype. It is tested on basic darknet tiny models and is intended for model conversion and optimization for edge devices.

@@ -1,12 +1,45 @@
+# --------------------------------------------------------------------------
+# darknet_parser.py
+# --------------------------------------------------------------------------
+# This file is part of:
+# SushiConverter
+# https://github.com/SushiSystems/SushiConverter
+# https://sushisystems.io
+# --------------------------------------------------------------------------
+# Copyright (c) 2026-present  Mustafa Garip & Sushi Systems
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+# IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+# CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+# TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# --------------------------------------------------------------------------
+
+import os
 import torch
+import warnings
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import os
-import warnings
 from .logger import log_info, log_warning, log_success, log_error
 
 class Mish(nn.Module):
+    """
+    Mish activation function.
+    """
     def __init__(self):
         super().__init__()
 
@@ -14,6 +47,9 @@ class Mish(nn.Module):
         return x * torch.tanh(F.softplus(x))
 
 class MaxPoolDark(nn.Module):
+    """
+    Darknet-compatible MaxPool2d with specific padding.
+    """
     def __init__(self, size=2, stride=1):
         super(MaxPoolDark, self).__init__()
         self.size = size
@@ -40,13 +76,16 @@ class MaxPoolDark(nn.Module):
         return x
 
 class YOLOLayer(nn.Module):
+    """
+    YOLO detection layer for coordinate decoding.
+    """
     warned = False
 
     def __init__(self, anchors, mask, classes, img_size, no_yolo_layer=False):
         super(YOLOLayer, self).__init__()
         self.anchors = torch.FloatTensor([anchors[i] for i in mask])
         self.classes = classes
-        self.img_size = img_size  # (height, width)
+        self.img_size = img_size
         self.no_yolo_layer = no_yolo_layer
         self.num_anchors = len(mask)
         self.register_buffer('anchor_grid', self.anchors.clone().view(1, self.num_anchors, 1, 1, 2))
@@ -61,7 +100,7 @@ class YOLOLayer(nn.Module):
             return x
 
         if not YOLOLayer.warned:
-            log_warning("This model is optimized for static shapes only. Dynamic input sizes are not supported and may lead to unexpected results.")
+            log_warning("Model optimized for static shapes only.")
             YOLOLayer.warned = True
 
         with warnings.catch_warnings():
@@ -70,17 +109,14 @@ class YOLOLayer(nn.Module):
             B, C, H, W = x.shape
             x = x.view(B, self.num_anchors, 5 + self.classes, H, W).permute(0, 1, 3, 4, 2).contiguous()
 
-            # Split to avoid Gather/ScatterND
             xy, wh, conf_cls = torch.split(x, [2, 2, self.classes + 1], dim=-1)
 
-            # Activation functions
             xy = torch.sigmoid(xy)
             conf_cls = torch.sigmoid(conf_cls)
 
             if self.grid is None or self.grid.shape[2:4] != (H, W):
                 self.grid = self._make_grid(W, H).to(x.device)
 
-            # Decoding arithmetic
             stride_x = self.img_size[1] / W
             stride_y = self.img_size[0] / H
             
@@ -92,13 +128,16 @@ class YOLOLayer(nn.Module):
             return pred.view(B, -1, 5 + self.classes)
 
 class DarknetParser(nn.Module):
+    """
+    Parses Darknet .cfg files and builds PyTorch network.
+    """
     def __init__(self, cfgfile, no_yolo_layer=False):
         super(DarknetParser, self).__init__()
         self.no_yolo_layer = no_yolo_layer
         self.blocks = self._parse_cfg(cfgfile)
 
         while self.blocks and self.blocks[-1]['type'] == 'contrastive':
-            log_info("Pruning 'contrastive' layer found at the end of the network.")
+            log_info("Pruning 'contrastive' layer from end.")
             self.blocks.pop()
 
         self.net_info = self.blocks[0]
@@ -109,6 +148,11 @@ class DarknetParser(nn.Module):
         self.seen = 0
 
     def _parse_cfg(self, cfgfile):
+        """
+        Reads .cfg file into internal block list.
+        @param cfgfile path to .cfg file.
+        @return list of block dictionaries.
+        """
         with open(cfgfile, 'r') as file:
             lines = file.read().split('\n')
             lines = [x for x in lines if x and not x.startswith('#')]
@@ -127,12 +171,17 @@ class DarknetParser(nn.Module):
                     key, value = line.split("=")
                     block[key.rstrip()] = value.lstrip()
                 except:
-                    log_warning(f"Skipping malformed line in CFG: {line}")
+                    log_warning(f"Skipping malformed line: {line}")
                     continue
         blocks.append(block)
         return blocks
 
     def _create_network(self, blocks):
+        """
+        Instantiates PyTorch layers based on blocks.
+        @param blocks model specification.
+        @return nn.ModuleList containing layers.
+        """
         models = nn.ModuleList()
         prev_filters = 3
         out_filters = []
@@ -168,9 +217,7 @@ class DarknetParser(nn.Module):
                     module.add_module(f'leaky{conv_id}', nn.LeakyReLU(0.1, inplace=True))
                 elif activation == 'mish':
                     module.add_module(f'mish{conv_id}', Mish())
-                elif activation == 'linear':
-                    pass
-
+                
                 prev_filters = filters
                 out_filters.append(prev_filters)
                 prev_stride = stride * prev_stride
@@ -224,16 +271,7 @@ class DarknetParser(nn.Module):
                     groups = int(block['groups'])
                     total_filters = out_filters[layers[0]] // groups
                 else:
-                    total_filters = 0
-                    for l in layers:
-                        try:
-                            total_filters += out_filters[l]
-                        except IndexError:
-                             log_error(f"DEBUG ERROR: Block {len(models)}, Type {block_type}")
-                             log_error(f"Refers to l={l}, out_filters len={len(out_filters)}")
-                             log_error(f"Original layers: {block['layers']}")
-                             log_error(f"Calculated layers: {layers}")
-                             raise
+                    total_filters = sum(out_filters[l] for l in layers)
 
                 out_filters.append(total_filters)
                 prev_filters = total_filters
@@ -246,8 +284,7 @@ class DarknetParser(nn.Module):
                 models.append(nn.Identity())
 
             elif block_type == 'yolo':
-                mask = block['mask'].split(',')
-                mask = [int(x) for x in mask]
+                mask = [int(x) for x in block['mask'].split(',')]
                 anchors = block['anchors'].split(',')
                 anchors = [int(x) for x in anchors]
                 anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors), 2)]
@@ -259,21 +296,20 @@ class DarknetParser(nn.Module):
                 out_strides.append(prev_stride)
                 models.append(module)
 
-            elif block_type == 'contrastive':
-                log_info("Replacing middle 'contrastive' layer with Identity.")
-                out_filters.append(prev_filters)
-                out_strides.append(prev_stride)
-                models.append(nn.Identity())
-
             else:
-                log_warning(f"Unknown block type: {block_type}. Using Identity.")
                 out_filters.append(prev_filters)
                 out_strides.append(prev_stride)
                 models.append(nn.Identity())
 
+        self.out_filters = out_filters
         return models
 
     def forward(self, x):
+        """
+        Executes model inference.
+        @param x input tensor.
+        @return output tensor(s).
+        """
         outputs = {}
         yolo_outputs = []
 
@@ -300,7 +336,7 @@ class DarknetParser(nn.Module):
                         x = val[:, start:end, :, :]
                     else:
                         x = outputs[layers[0]]
-                elif len(layers) > 1:
+                else:
                     maps = [outputs[l] for l in layers]
                     x = torch.cat(maps, 1)
                 outputs[i] = x
@@ -309,11 +345,7 @@ class DarknetParser(nn.Module):
                 from_layer = int(block['from'])
                 activation = block.get('activation', 'linear')
                 from_layer = from_layer if from_layer >= 0 else from_layer + i
-
-                x1 = outputs[from_layer]
-                x2 = outputs[i - 1]
-                x = x1 + x2
-
+                x = outputs[from_layer] + outputs[i - 1]
                 if activation == 'leaky':
                     x = F.leaky_relu(x, 0.1, inplace=True)
                 outputs[i] = x
@@ -333,11 +365,15 @@ class DarknetParser(nn.Module):
         return x
 
     def load_weights(self, weightfile):
+        """
+        Extracts binary weights into layers.
+        @param weightfile path to .weights.
+        """
         if not weightfile or not os.path.exists(weightfile):
-            log_warning(f"Weight file not found: {weightfile}")
+            log_warning(f"File missing: {weightfile}")
             return
 
-        log_info(f"Loading weights from {weightfile}")
+        log_info(f"Loading {weightfile}")
         with open(weightfile, 'rb') as fp:
             header = np.fromfile(fp, count=5, dtype=np.int32)
             self.header = torch.from_numpy(header)
@@ -349,7 +385,6 @@ class DarknetParser(nn.Module):
 
         for i, (module, block) in enumerate(zip(self.models, self.blocks[1:])):
             if block['type'] == 'contrastive':
-                log_info("Reached 'contrastive' layer during weight loading. Stopping further loading.")
                 break
 
             if block['type'] == 'convolutional':
@@ -359,9 +394,7 @@ class DarknetParser(nn.Module):
                 def load_tensor(param, ptr):
                     numel = param.numel()
                     if ptr + numel > total_len:
-                        raise RuntimeError(f"Weight mismatch at layer {i}: expected {numel} more values, but reached EOF. "
-                                           f"Check if you are using the correct weights for this .cfg file.")
-
+                        raise RuntimeError(f"EOF at layer {i}")
                     w_data = torch.from_numpy(weights[ptr : ptr + numel]).view_as(param)
                     param.data.copy_(w_data)
                     return ptr + numel
@@ -377,4 +410,4 @@ class DarknetParser(nn.Module):
 
                 ptr = load_tensor(conv_layer.weight, ptr)
 
-        log_success("Weights loaded successfully.")
+        log_success("Weights loaded.")

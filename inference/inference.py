@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# post_process.py
+# inference.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,43 +28,29 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import os
-import onnx
-from core.logger import log_info, log_warning, log_success
+from core.logger import log_info, log_warning
+from .onnx_engine import run_onnx_inference
 
-def optimize_onnx(onnx_path, simplify=True):
+def run_inference_test(output_mode, final_path, shape, source_mode='darknet'):
     """
-    Applies graph optimizations and NPU patches.
-    @param onnx_path source ONNX file.
-    @param simplify apply onnx-simplifier.
-    @return path to optimized model.
+    Routes inference tests to the correct backend.
+    @param output_mode format being tested.
+    @param final_path file path to model.
+    @param shape input dimensions.
+    @param source_mode input format.
+    @return True if inference succeeded.
     """
-    TARGET_OPSET = 11
-    TARGET_IR = 7
-    
-    model = onnx.load(onnx_path)
-    
-    if simplify:
-        try:
-            from onnxsim import simplify as onnx_simplify
-            log_info("Running simplifier...")
-            model, check = onnx_simplify(model)
-        except ImportError:
-            log_warning("onnx-simplifier missing. Skipping.")
-    
-    if model.ir_version > TARGET_IR:
-        log_info(f"Lowering IR version: {model.ir_version} -> {TARGET_IR}")
-        model.ir_version = TARGET_IR
-
-    for opset_import in model.opset_import:
-        if opset_import.domain == '' or opset_import.domain == 'ai.onnx':
-            opset_import.version = TARGET_OPSET
-            
-    onnx.save(model, onnx_path)
-    
-    data_file = onnx_path + ".data"
-    if os.path.exists(data_file):
-        os.remove(data_file)
-    
-    log_success("Optimize finished.")
-    return onnx_path
+    if output_mode == 'onnx':
+        log_info(f"Functional Test: [ONNX Engine]")
+        return run_onnx_inference(final_path, shape, source_mode=source_mode)
+        
+    elif output_mode == 'caffe':
+        log_info("Caffe uses OpenCV DNN for validation. Skipping extra test.")
+        return True
+        
+    elif output_mode in ['pytorch', 'source', 'pth']:
+        log_info(f"{output_mode.upper()} validated natively. Skipping extra test.")
+        return True
+        
+    log_warning(f"Inference test for {output_mode} not supported.")
+    return True 

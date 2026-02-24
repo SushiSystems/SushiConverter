@@ -11,6 +11,9 @@ env/
 *.onnx
 *.cfg
 *.pt
+*.pth
+*.prototxt
+*.caffemodel
 
 core/__pycache__/
 exporters/__pycache__/

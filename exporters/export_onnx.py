@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# post_process.py
+# export_onnx.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,43 +28,15 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import os
-import onnx
-from core.logger import log_info, log_warning, log_success
+import torch.nn as nn
+from core.logger import log_info
 
-def optimize_onnx(onnx_path, simplify=True):
+def load_onnx_to_pytorch(onnx_model_path):
     """
-    Applies graph optimizations and NPU patches.
-    @param onnx_path source ONNX file.
-    @param simplify apply onnx-simplifier.
-    @return path to optimized model.
+    Reconstructs model architecture from ONNX.
+    @param onnx_model_path Path to input ONNX.
+    @return Reconstructed PyTorch module.
     """
-    TARGET_OPSET = 11
-    TARGET_IR = 7
-    
-    model = onnx.load(onnx_path)
-    
-    if simplify:
-        try:
-            from onnxsim import simplify as onnx_simplify
-            log_info("Running simplifier...")
-            model, check = onnx_simplify(model)
-        except ImportError:
-            log_warning("onnx-simplifier missing. Skipping.")
-    
-    if model.ir_version > TARGET_IR:
-        log_info(f"Lowering IR version: {model.ir_version} -> {TARGET_IR}")
-        model.ir_version = TARGET_IR
-
-    for opset_import in model.opset_import:
-        if opset_import.domain == '' or opset_import.domain == 'ai.onnx':
-            opset_import.version = TARGET_OPSET
-            
-    onnx.save(model, onnx_path)
-    
-    data_file = onnx_path + ".data"
-    if os.path.exists(data_file):
-        os.remove(data_file)
-    
-    log_success("Optimize finished.")
-    return onnx_path
+    log_info(f"Loading {onnx_model_path} into PyTorch structure...")
+    # # TODO: Integrate onnx2torch for full reconstruction
+    return nn.Identity()
