@@ -40,28 +40,28 @@ python main.py --mode darknet --graph model.cfg --weights model.weights --output
 
 ## Arguments
 
---mode
+*--mode*:
 Input model type (darknet, pytorch, onnx).
 
---graph
+*--graph*:
 Path to the model graph definition (e.g., .cfg file).
 
---weights
+*--weights*:
 Path to the weight file (.weights, .pt, or .pth).
 
---output-mode
+*--output-mode*:
 Target format (onnx, pytorch, caffe, source, pth).
 
---validate
+*--validate*:
 Compare source and output results using numerical tests.
 
---yolo-layer
+*--yolo-layer*:
 Include decoded YOLO predictions in the output. Default is raw tensors.
 
---no-simplify
+*--no-simplify*:
 Skip the ONNX simplification step.
 
---shape
+*--shape*:
 Define input shape B C H W (default: 1 3 416 416).
 
 ## Status
