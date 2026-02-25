@@ -96,6 +96,8 @@ class CaffeExporter:
         conv_param.stride.append(s)
         conv_param.pad.append(p)
         conv_param.bias_term = not batch_normalize
+        if conv_layer.groups > 1:
+            conv_param.group = conv_layer.groups
 
         weight_blob = pb.BlobProto()
         weight_blob.data.extend(conv_layer.weight.data.cpu().numpy().flatten())
@@ -244,24 +246,54 @@ class CaffeExporter:
 
     def add_route(self, module, block, module_idx, bottom):
         """
-        Maps routing using Concat.
+        Maps routing using Concat or Slice.
         """
-        route_name = f"route_{module_idx}"
-        layer = self.net_msg.layer.add()
-        layer.name = route_name
-        layer.type = "Concat"
-        
         layers = block['layers'].split(',')
         layers = [int(i) if int(i) >= 0 else int(i) + module_idx for i in layers]
         
-        if 'groups' in block:
-            log_warning("Group routing might fail in standard Caffe.")
+        if len(layers) == 1 and 'groups' in block:
+            # Darknet Group Routing is a split/slice operation
+            groups = int(block['groups'])
+            group_id = int(block['group_id'])
             
-        for l in layers:
-            layer.bottom.append(self.top_names[l])
+            # Use Slice layer
+            slice_name = f"slice_{module_idx}"
+            layer = self.net_msg.layer.add()
+            layer.name = slice_name
+            layer.type = "Slice"
+            layer.bottom.append(self.top_names[layers[0]])
             
-        layer.top.append(route_name)
-        self.top_names[module_idx] = route_name
+            # Use out_filters from the model to calculate split points
+            total_channels = self.net.out_filters[layers[0]]
+            group_channels = total_channels // groups
+            
+            for g in range(groups):
+                top_name = f"slice_{module_idx}_g{g}"
+                layer.top.append(top_name)
+                if g == group_id:
+                    self.top_names[module_idx] = top_name
+            
+            slice_param = layer.slice_param
+            slice_param.axis = 1 # Split across channels
+            for g in range(1, groups):
+                slice_param.slice_point.append(g * group_channels)
+                
+            log_info(f"Mapped Group Routing to Caffe Slice (Module {module_idx})")
+        else:
+            # Standard Concat Routing
+            route_name = f"route_{module_idx}"
+            layer = self.net_msg.layer.add()
+            layer.name = route_name
+            layer.type = "Concat"
+            
+            for l in layers:
+                if l in self.top_names:
+                    layer.bottom.append(self.top_names[l])
+                else:
+                    log_error(f"Route source {l} not found for layer {module_idx}")
+                    
+            layer.top.append(route_name)
+            self.top_names[module_idx] = route_name
 
     def add_shortcut(self, module, block, module_idx, bottom):
         """
