@@ -193,9 +193,27 @@ class CaffeExporter:
         pool_param.stride = stride
         
         if stride == 1 and size % 2:
-           pool_param.pad = size // 2
-           
-        self.top_names[module_idx] = pool_name
+            pool_param.pad = size // 2
+            self.top_names[module_idx] = pool_name
+        elif stride == 1 and size == 2:
+            # Darknet asymmetric padding workaround for size=2 stride=1
+            pool_param.pad = 1
+            
+            crop_name = f"crop_{module_idx}"
+            layer_crop = self.net_msg.layer.add()
+            layer_crop.name = crop_name
+            layer_crop.type = "Crop"
+            layer_crop.bottom.append(pool_name)
+            # Crop to the shape of the input to the pool layer (13x13)
+            layer_crop.bottom.append(bottom)
+            layer_crop.top.append(crop_name)
+            
+            layer_crop.crop_param.axis = 2
+            layer_crop.crop_param.offset.extend([1, 1])
+            
+            self.top_names[module_idx] = crop_name
+        else:
+            self.top_names[module_idx] = pool_name
 
     def nearest_weight(self, channels, s):
         """
@@ -252,33 +270,38 @@ class CaffeExporter:
         layers = [int(i) if int(i) >= 0 else int(i) + module_idx for i in layers]
         
         if len(layers) == 1 and 'groups' in block:
-            # Darknet Group Routing is a split/slice operation
             groups = int(block['groups'])
             group_id = int(block['group_id'])
             
-            # Use Slice layer
-            slice_name = f"slice_{module_idx}"
+            conv_name = f"route_extract_{module_idx}"
             layer = self.net_msg.layer.add()
-            layer.name = slice_name
-            layer.type = "Slice"
+            layer.name = conv_name
+            layer.type = "Convolution"
             layer.bottom.append(self.top_names[layers[0]])
+            layer.top.append(conv_name)
+            self.top_names[module_idx] = conv_name
             
-            # Use out_filters from the model to calculate split points
             total_channels = self.net.out_filters[layers[0]]
             group_channels = total_channels // groups
             
-            for g in range(groups):
-                top_name = f"slice_{module_idx}_g{g}"
-                layer.top.append(top_name)
-                if g == group_id:
-                    self.top_names[module_idx] = top_name
+            conv_param = layer.convolution_param
+            conv_param.num_output = group_channels
+            conv_param.kernel_size.append(1)
+            conv_param.stride.append(1)
+            conv_param.pad.append(0)
+            conv_param.bias_term = False
             
-            slice_param = layer.slice_param
-            slice_param.axis = 1 # Split across channels
-            for g in range(1, groups):
-                slice_param.slice_point.append(g * group_channels)
+            weight = np.zeros((group_channels, total_channels, 1, 1), dtype=np.float32)
+            start_idx = group_channels * group_id
+            for j in range(group_channels):
+                weight[j, start_idx + j, 0, 0] = 1.0
                 
-            log_info(f"Mapped Group Routing to Caffe Slice (Module {module_idx})")
+            weight_blob = pb.BlobProto()
+            weight_blob.data.extend(weight.flatten())
+            weight_blob.shape.dim.extend(list(weight.shape))
+            layer.blobs.extend([weight_blob])
+            
+            log_info(f"Mapped Group Routing to 1x1 Extraction Conv (Module {module_idx}) to prevent dangling slices.")
         else:
             # Standard Concat Routing
             route_name = f"route_{module_idx}"

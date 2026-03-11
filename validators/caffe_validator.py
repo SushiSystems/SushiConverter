@@ -84,23 +84,29 @@ def validate_caffe(pt_model, prototxt_path, caffemodel_path, input_shape, tolera
 
     log_info(f"Comparing {len(pt_out)} predicted vs {len(caffe_out)} extracted.")
     
-    all_pass = True
-    min_len = min(len(pt_out), len(caffe_out))
+    if len(pt_out) != len(caffe_out):
+        log_error(f"Output count mismatch: PyTorch ({len(pt_out)}) vs Caffe ({len(caffe_out)})")
+        return False
+        
+    pt_out_sorted = sorted(pt_out, key=lambda x: np.prod(x.shape))
+    caffe_out_sorted = sorted(caffe_out, key=lambda x: np.prod(x.shape))
     
-    for i in range(min_len):
-        p, c = pt_out[i], caffe_out[i]
+    all_pass = True
+    
+    for i in range(len(pt_out)):
+        p, c = pt_out_sorted[i], caffe_out_sorted[i]
         
         if p.shape != c.shape:
              if p.size == c.size:
                  c = c.reshape(p.shape)
              else:
-                 log_error(f"Output {i} size mismatch.")
+                 log_error(f"Output {i} size mismatch: PyTorch {p.shape} vs Caffe {c.shape}")
                  all_pass = False
                  continue
             
         mae = np.mean(np.abs(p - c))
         if np.isnan(mae) or mae > tolerance:
-            log_warning(f"Output {i} difference: {mae:.6f}")
+            log_error(f"Output {i} difference too high: {mae:.6f} > {tolerance}")
             all_pass = False
         else:
             log_success(f"Output {i} matches (MAE: {mae:.6f}).")
