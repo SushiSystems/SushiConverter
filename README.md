@@ -6,6 +6,7 @@ Simple tool to convert and optimize neural network models for deployment. It sup
 
 - Converts Darknet (.cfg/.weights) to ONNX, Caffe, PyTorch, and standalone Python source.
 - Converts PyTorch (.pt) models to ONNX.
+- Converts ONNX (.onnx) models to Caffe.
 - Enforces ONNX Opset 11 for hardware compatibility.
 - Provides standalone source code generation for Darknet models.
 - Includes a numerical validation pipeline to compare output results.
@@ -37,6 +38,10 @@ python main.py --mode darknet --graph model.cfg --weights model.weights --output
 
 ### Standalone Python Source (.py + .pth)
 python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode source --output standalone_model
+
+### ONNX to Caffe
+python main.py --mode onnx --weights model.onnx --output-mode caffe --validate
+
 
 ## Arguments
 

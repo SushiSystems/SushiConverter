@@ -46,7 +46,13 @@ def validate_caffe(pt_model, prototxt_path, caffemodel_path, input_shape, tolera
     """
     log_info("Starting Caffe validation...")
     
-    device = next(pt_model.parameters()).device if hasattr(pt_model, 'parameters') else torch.device('cpu')
+    if hasattr(pt_model, 'parameters') and any(True for _ in pt_model.parameters()):
+        device = next(pt_model.parameters()).device
+    elif hasattr(pt_model, 'device'):
+        device = pt_model.device
+    else:
+        device = torch.device('cpu')
+        
     dummy_input = torch.randn(*input_shape).float().to(device)
     
     pt_model.eval()

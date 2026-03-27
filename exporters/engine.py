@@ -162,6 +162,13 @@ class ExportDispatcher:
                 log_success(f"Optimized model at {final_path}")
                 return final_path, None
                 
+            elif self.output_mode == 'caffe':
+                from exporters.onnx2caffe.converter import convert_onnx_to_caffe
+                from exporters.onnx2caffe.utils import OnnxModelWrapper
+                convert_onnx_to_caffe(self.weights_path, self.output_path, self.shape)
+                log_success(f"ONNX exported to Caffe at {self.output_path}")
+                return self.output_path, OnnxModelWrapper(self.weights_path)
+                
         model = None
         if self.input_mode == 'darknet':
             model = self._load_darknet()

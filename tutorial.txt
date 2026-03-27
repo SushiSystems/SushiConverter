@@ -29,6 +29,9 @@ python main.py --mode darknet --graph model.cfg --weights model.weights --output
 6. Weights Only (.pth)
 python main.py --mode darknet --graph model.cfg --weights model.weights --output-mode pth
 
+7. ONNX to Caffe
+python main.py --mode onnx --weights model.onnx --output-mode caffe --validate
+
 Notes:
 - Use --validate to ensure the ONNX model matches the original.
 - Use --no-simplify to disable ONNX model simplification.
