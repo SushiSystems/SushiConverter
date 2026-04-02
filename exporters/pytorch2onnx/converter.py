@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# export_onnx.py
+# converter.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,15 +28,47 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import torch.nn as nn
-from core.logger import log_info
+import torch
+from core.logger import log_error, log_info, log_success
 
-def load_onnx_to_pytorch(onnx_model_path):
+def export_pytorch_to_onnx(model, input_shape, output_path):
     """
-    Reconstructs model architecture from ONNX.
-    @param onnx_model_path Path to input ONNX.
-    @return Reconstructed PyTorch module.
+    Exports PyTorch model via ONNX tracer.
     """
-    log_info(f"Loading {onnx_model_path} into PyTorch structure...")
-    # # TODO: Integrate onnx2torch for full reconstruction
-    return nn.Identity()
+    OPSET_VERSION = 11
+    
+    dummy_input = torch.randn(*input_shape, requires_grad=False)
+    
+    # Handle both models with and without parameters
+    if hasattr(model, 'parameters') and any(True for _ in model.parameters()):
+        device = next(model.parameters()).device
+        dummy_input = dummy_input.to(device)
+    
+    model.eval()
+    with torch.no_grad():
+        outputs = model(dummy_input)
+    
+    if isinstance(outputs, (list, tuple)):
+        output_names = [f'output{i}' for i in range(len(outputs))]
+    else:
+        output_names = ['output']
+
+    try:
+        log_info(f"Exporting PyTorch model to ONNX (Opset {OPSET_VERSION})...")
+        torch.onnx.export(
+            model,
+            dummy_input,
+            output_path,
+            export_params=True,
+            opset_version=OPSET_VERSION,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=output_names,
+            dynamic_axes=None,
+            verbose=False
+        )
+        log_success(f"ONNX model saved at {output_path}")
+        return True
+    except Exception as e:
+        log_error(f"Native export failed: {e}")
+        raise e

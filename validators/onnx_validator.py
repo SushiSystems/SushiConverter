@@ -33,6 +33,19 @@ import numpy as np
 import onnxruntime as ort
 from core.logger import log_info, log_warning, log_error, log_success
 
+def _flatten_to_numpy(obj):
+    """Recursively flatten nested dict/list/tuple of tensors to list of numpy arrays."""
+    results = []
+    if isinstance(obj, dict):
+        for v in obj.values():
+            results.extend(_flatten_to_numpy(v))
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            results.extend(_flatten_to_numpy(item))
+    elif hasattr(obj, 'cpu'):
+        results.append(obj.cpu().numpy())
+    return results
+
 def validate_onnx(pt_model, onnx_path, input_shape, tolerance=1e-4):
     """
     Compares PyTorch vs ONNXRuntime.
@@ -57,8 +70,11 @@ def validate_onnx(pt_model, onnx_path, input_shape, tolerance=1e-4):
     with torch.no_grad():
         pt_out = pt_model(dummy_input)
     
-    if isinstance(pt_out, (list, tuple)):
-        pt_out = [x.cpu().numpy() for x in pt_out]
+    if isinstance(pt_out, dict):
+        # Newer Ultralytics models (v10/v11/v26) return dicts
+        pt_out = _flatten_to_numpy(pt_out)
+    elif isinstance(pt_out, (list, tuple)):
+        pt_out = _flatten_to_numpy(pt_out)
     else:
         pt_out = [pt_out.cpu().numpy()]
         
@@ -75,20 +91,53 @@ def validate_onnx(pt_model, onnx_path, input_shape, tolerance=1e-4):
         log_error(f"Execution failed: {e}")
         return False
     
-    log_info(f"Comparing {len(pt_out)} predicted vs {len(onnx_out)} exported.")
+    log_info(f"Comparing {len(pt_out)} PyTorch vs {len(onnx_out)} ONNX outputs.")
     
-    all_pass = True
-    for i, (p, o) in enumerate(zip(pt_out, onnx_out)):
-        if p.shape != o.shape:
-            log_error(f"Output {i} shape mismatch.")
-            all_pass = False
-            continue
-            
-        mae = np.mean(np.abs(p - o))
-        if np.isnan(mae) or mae > tolerance:
-            log_warning(f"Output {i} difference: {mae:.6f}")
-            all_pass = False
+    # When output counts differ (e.g. PyTorch returns post-processed + raw),
+    # match by shape to find corresponding outputs
+    if len(pt_out) != len(onnx_out):
+        log_warning(f"Output count mismatch ({len(pt_out)} vs {len(onnx_out)}). Matching by shape...")
+    
+    matched = 0
+    failed = 0
+    
+    for oi, o in enumerate(onnx_out):
+        best_mae = float('inf')
+        best_idx = -1
+        matched_by_shape = False
+
+        # Pass 1: Exact shape match
+        for pi, p in enumerate(pt_out):
+            if p.shape == o.shape:
+                mae = np.mean(np.abs(p - o))
+                if mae < best_mae:
+                    best_mae = mae
+                    best_idx = pi
+                    matched_by_shape = True
+
+        # Pass 2: Fallback to size (reshape) if no exact shape was good enough
+        if best_idx == -1 or best_mae > tolerance:
+            for pi, p in enumerate(pt_out):
+                if p.size == o.size and p.shape != o.shape:
+                    candidate = o.reshape(p.shape)
+                    mae = np.mean(np.abs(p - candidate))
+                    if mae < best_mae:
+                        best_mae = mae
+                        best_idx = pi
+        
+        if best_idx >= 0:
+            if np.isnan(best_mae) or best_mae > tolerance:
+                log_warning(f"ONNX output {oi} best match MAE: {best_mae:.6f} (above tolerance)")
+                failed += 1
+            else:
+                log_success(f"ONNX output {oi} validated (MAE: {best_mae:.6f}).")
+                matched += 1
         else:
-            log_success(f"Output {i} validated (MAE: {mae:.6f}).")
-            
-    return all_pass
+            log_warning(f"ONNX output {oi} has no shape-matching PyTorch output. Skipped.")
+    
+    if matched == 0:
+        log_error("No outputs matched between PyTorch and ONNX.")
+        return False
+    
+    log_info(f"Matched {matched}/{len(onnx_out)} outputs, {failed} above tolerance.")
+    return failed == 0

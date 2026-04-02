@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# export_pytorch.py
+# onnx_optimizer.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,46 +28,36 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import torch
-from core.logger import log_error, log_info, log_success
+import os
+from core.logger import log_info, log_error
 
-def export_pytorch_to_onnx(model, input_shape, output_path):
+def optimize_onnx(onnx_path, simplify=True):
     """
-    Exports PyTorch model via ONNX tracer.
-    @param model PyTorch model.
-    @param input_shape shape for dummy input.
-    @param output_path output location.
-    @return True if export succeeded.
+    Optimizes ONNX graph for hardware deployment.
     """
-    OPSET_VERSION = 11
-    
-    dummy_input = torch.randn(*input_shape, requires_grad=False)
-    device = next(model.parameters()).device
-    dummy_input = dummy_input.to(device)
-    
-    model.eval()
-    with torch.no_grad():
-        outputs = model(dummy_input)
-    
-    if isinstance(outputs, (list, tuple)):
-        output_names = [f'output{i}' for i in range(len(outputs))]
-    else:
-        output_names = ['output']
+    if not simplify:
+        return onnx_path
 
     try:
-        torch.onnx.export(
-            model,
-            dummy_input,
-            output_path,
-            export_params=True,
-            opset_version=OPSET_VERSION,
-            do_constant_folding=True,
-            input_names=['input'],
-            output_names=output_names,
-            dynamic_axes=None,
-            verbose=False
-        )
-        return True
+        import onnx
+        from onnxsim import simplify
+        
+        log_info(f"Simplifying ONNX graph: {onnx_path}")
+        model = onnx.load(onnx_path)
+        model_simp, check = simplify(model)
+        
+        if not check:
+            log_error("Simulated graph match failed. Results might be invalid.")
+        
+        base, ext = os.path.splitext(onnx_path)
+        optimized_path = f"{base}_optimized{ext}"
+        onnx.save(model_simp, optimized_path)
+        
+        return optimized_path
+    
+    except ImportError:
+        log_error("onnxsim not found. Skipping simplification.")
+        return onnx_path
     except Exception as e:
-        log_error(f"Native export failed: {e}")
-        raise e
+        log_error(f"Optimization failed: {e}")
+        return onnx_path

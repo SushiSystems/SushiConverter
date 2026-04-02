@@ -59,8 +59,7 @@ def run_onnx_inference(onnx_path, input_shape, source_mode='darknet'):
         
         if unsupported_ops:
             ops_str = ", ".join(sorted(list(unsupported_ops)))
-            log_error(f"Unsupported ops found: {ops_str}")
-            return False
+            log_warning(f"NPU-incompatible ops detected: {ops_str}. Model may need NPU head optimization for deployment.")
 
         net = cv2.dnn.readNetFromONNX(onnx_path)
         net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)

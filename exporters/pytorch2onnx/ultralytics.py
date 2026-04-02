@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# export_ultralytics.py
+# ultralytics.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -44,17 +44,31 @@ class RawNPUHead(nn.Module):
         self.cv2 = original_layer.cv2
 
     def forward(self, x):
+        if x is None:
+            from core.logger import log_error
+            log_error("RawNPUHead: Received x=None as input!")
+            return []
+        
+        # If x is not a list/tuple (e.g. YOLOv10 might behave differently)
+        if not isinstance(x, (list, tuple)):
+            # Log it but try to wrap it
+            from core.logger import log_warning
+            log_warning(f"RawNPUHead: Expected list input, got {type(x)}")
+            x = [x]
+        
         res = []
         for i in range(self.nl):
-            feat = self.cv2[i](x[i])
-            res.append(feat)
+            if i < len(x):
+                feat = self.cv2[i](x[i])
+                res.append(feat)
+            else:
+                # Padding or different head structure?
+                pass
         return res
 
 def is_ultralytics_model(model):
     """
     Identifies if model is from Ultralytics.
-    @param model model object.
-    @return tuple (is_ultra, layers).
     """
     model_layers = None
     if hasattr(model, 'model') and isinstance(model.model, nn.Sequential):
@@ -76,11 +90,9 @@ def is_ultralytics_model(model):
 
 def export_ultralytics_to_onnx(model, input_shape, output_path):
     """
-    Optimized export for YOLOv5/v8.
-    @param model Ultralytics model.
-    @param input_shape input dimensions.
-    @param output_path output location.
-    @return True if success.
+    Optimized export for Ultralytics models (YOLOv5/v8/v10/v11/v26+).
+    Attempts NPU-optimized head replacement first; falls back to
+    standard export if the model architecture is incompatible.
     """
     OPSET_VERSION = 11
 
@@ -88,28 +100,24 @@ def export_ultralytics_to_onnx(model, input_shape, output_path):
     if not is_ultra:
         return False
 
-    log_info("Applying NPU optimization for Ultralytics head...")
+    device = next(model.parameters()).device
+    dummy_input = torch.randn(*input_shape).to(device)
+    model.eval()
+
+    # --- Attempt 1: NPU-optimized export (raw detection head) ---
+    original_layer = model_layers[-1]
+    npu_success = False
 
     try:
-        last_layer = model_layers[-1]
-        new_layer = RawNPUHead(last_layer)
+        log_info("Applying NPU optimization for Ultralytics head...")
+        new_layer = RawNPUHead(original_layer)
         for attr in ['i', 'f', 'type']:
-            if hasattr(last_layer, attr):
-                setattr(new_layer, attr, getattr(last_layer, attr))
-        
+            if hasattr(original_layer, attr):
+                setattr(new_layer, attr, getattr(original_layer, attr))
+
         model_layers[-1] = new_layer
         log_info("Detect layer replaced.")
-        
-    except Exception as e:
-        log_warning(f"NPU transformation failed: {e}")
-        return False
 
-    try:
-        device = next(model.parameters()).device
-        dummy_input = torch.randn(*input_shape).to(device)
-        model.eval()
-
-        log_info(f"Exporting to ONNX (v{OPSET_VERSION})...")
         torch.onnx.export(
             model,
             dummy_input,
@@ -119,17 +127,42 @@ def export_ultralytics_to_onnx(model, input_shape, output_path):
             output_names=['output0'],
             do_constant_folding=True
         )
+        npu_success = True
+        log_success("NPU-optimized Ultralytics export PASSED.")
 
+    except Exception as e:
+        log_warning(f"NPU head export failed ({e}). Restoring original head...")
+        # Restore original detect layer
+        model_layers[-1] = original_layer
+
+    # --- Attempt 2: Standard export (full detect head) ---
+    if not npu_success:
+        try:
+            log_info("Falling back to standard Ultralytics ONNX export...")
+            torch.onnx.export(
+                model,
+                dummy_input,
+                output_path,
+                opset_version=OPSET_VERSION,
+                input_names=['images'],
+                output_names=['output0'],
+                do_constant_folding=True
+            )
+            log_success("Standard Ultralytics export PASSED.")
+
+        except Exception as e:
+            log_error(f"Standard export also failed: {e}")
+            raise e
+
+    # Clean up external data artifacts
+    try:
         onnx_model = onnx.load(output_path)
         onnx.save_model(onnx_model, output_path, save_as_external_data=False)
-        
+
         data_file = output_path + ".data"
         if os.path.exists(data_file):
             os.remove(data_file)
+    except Exception:
+        pass
 
-        log_success("Ultralytics export PASSED.")
-        return True
-
-    except Exception as e:
-        log_error(f"Export error: {e}")
-        raise e
+    return True

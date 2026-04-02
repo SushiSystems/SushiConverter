@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# export_pytorch_source.py
+# template.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -28,64 +28,8 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import os
-import json
-import torch
-import torch.nn as nn
-from core.logger import log_info, log_error
-
-def export_to_pth(model, output_path):
-    """
-    Saves model state_dict.
-    @param model PyTorch model instance.
-    @param output_path path to .pth file.
-    @return actual output path.
-    """
-    if not output_path.lower().endswith('.pth'):
-        output_path = os.path.splitext(output_path)[0] + '.pth'
-    
-    state_dict = model.state_dict()
-    torch.save(state_dict, output_path)
-    return output_path
-
-def export_to_source(model, output_path):
-    """
-    Exports architecture to .py and weights to .pth.
-    @param model Model to export.
-    @param output_path base filename.
-    @return tuple of paths created.
-    """
-    if not output_path.lower().endswith('.py'):
-        output_path = os.path.splitext(output_path)[0] + '.py'
-    
-    pth_path = os.path.splitext(output_path)[0] + '.pth'
-    export_to_pth(model, pth_path)
-    
-    from core.darknet_parser import DarknetParser
-    if isinstance(model, DarknetParser):
-        source_code = _generate_darknet_source(model, os.path.basename(pth_path), os.path.basename(output_path))
-    else:
-        log_error("Source export only supports DarknetParser.")
-        raise NotImplementedError("Manual source export not available for arbitrary models.")
-
-    with open(output_path, 'w') as f:
-        f.write(source_code)
-        
-    return output_path, pth_path
-
-def _generate_darknet_source(model, pth_filename, py_filename):
-    """
-    Builds the standalone Python source.
-    @param model DarknetParser source.
-    @param pth_filename name of weights file.
-    @param py_filename name of source file.
-    @return Python code string.
-    """
-    blocks_json = json.dumps(model.blocks)
-    no_yolo_layer_flag = "True" if model.no_yolo_layer else "False"
-    
-    template = f'''# --------------------------------------------------------------------------
-# {{py_filename}}
+SOURCE_TEMPLATE = r'''# --------------------------------------------------------------------------
+# PY_FILENAME
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -209,10 +153,10 @@ class SushiModel(nn.Module):
                 pad = (size - 1) // 2 if int(block.get(\'pad\', 0)) else 0
                 act = block[\'activation\']
                 
-                module.add_module(f\'conv{{conv_id}}\', nn.Conv2d(prev_filters, filters, size, stride, pad, bias=not bn))
-                if bn: module.add_module(f\'bn{{conv_id}}\', nn.BatchNorm2d(filters))
-                if act == \'leaky\': module.add_module(f\'leaky{{conv_id}}\', nn.LeakyReLU(0.1, inplace=True))
-                elif act == \'mish\': module.add_module(f\'mish{{conv_id}}\', Mish())
+                module.add_module(f\'conv{conv_id}\', nn.Conv2d(prev_filters, filters, size, stride, pad, bias=not bn))
+                if bn: module.add_module(f\'bn{conv_id}\', nn.BatchNorm2d(filters))
+                if act == \'leaky\': module.add_module(f\'leaky{conv_id}\', nn.LeakyReLU(0.1, inplace=True))
+                elif act == \'mish\': module.add_module(f\'mish{conv_id}\', Mish())
                 
                 prev_filters = filters
             elif b_type == \'maxpool\':
@@ -246,7 +190,7 @@ class SushiModel(nn.Module):
         return models
 
     def forward(self, x):
-        outputs = {{}}
+        outputs = {}
         yolo_outputs = []
         for i, block in enumerate(self.blocks[1:]):
             m = self.models[i]
@@ -298,12 +242,7 @@ if __name__ == "__main__":
         output = model(dummy_input)
     
     if isinstance(output, list):
-        print(f"YOLO Outputs: {{[o.shape for o in output]}}")
+        print(f"YOLO Outputs: {[o.shape for o in output]}")
     else:
-        print(f"Raw Output Shape: {{output.shape}}")
+        print(f"Raw Output Shape: {output.shape}")
 '''
-    source = template.replace('BLOCKS_PLACEHOLDER', blocks_json)
-    source = source.replace('PTH_FILENAME', pth_filename)
-    source = source.replace('DEFAULT_YOLO_FLAG', no_yolo_layer_flag)
-    
-    return source

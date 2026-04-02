@@ -31,13 +31,13 @@
 import os
 import torch
 from core.darknet_parser import DarknetParser
-from exporters.post_process import optimize_onnx
-from exporters.export_onnx import load_onnx_to_pytorch
-from exporters.export_pytorch import export_pytorch_to_onnx
-from exporters.export_caffe import export_pytorch_to_caffe
-from exporters.export_pytorch_source import export_to_source, export_to_pth
 from core.logger import log_info, log_error, log_success, log_warning
-from exporters.export_ultralytics import is_ultralytics_model, export_ultralytics_to_onnx
+from exporters.darknet2caffe.converter import export_darknet_to_caffe
+from exporters.pytorch2onnx.converter import export_pytorch_to_onnx
+from exporters.pytorch2onnx.ultralytics import export_ultralytics_to_onnx, is_ultralytics_model
+from exporters.darknet2source.converter import export_darknet_to_source, export_to_pth
+from exporters.onnx2pytorch.converter import load_onnx_to_pytorch
+from exporters.optimizer.onnx_optimizer import optimize_onnx
 
 class ExportDispatcher:
     """
@@ -65,6 +65,8 @@ class ExportDispatcher:
         self.no_yolo_layer = no_yolo_layer
         self.simplify = simplify
 
+        self._validate_modes()
+
         if self.output_mode == 'onnx' and not self.output_path.lower().endswith('.onnx'):
             self.output_path += '.onnx'
         elif self.output_mode == 'pytorch' and not self.output_path.lower().endswith('.pt'):
@@ -75,6 +77,16 @@ class ExportDispatcher:
             self.output_path += '.py'
         elif self.output_mode == 'pth' and not self.output_path.lower().endswith('.pth'):
             self.output_path += '.pth'
+
+    def _validate_modes(self):
+        """
+        Validates unsupported input and output formats and throws clear errors.
+        """
+        if self.output_mode == 'caffe' and self.input_mode != 'darknet' and self.input_mode != 'onnx':
+            raise ValueError(f"Direct export from {self.input_mode} to caffe is not yet supported. Please use darknet or onnx.")
+        
+        if self.output_mode in ['source', 'pth'] and self.input_mode != 'darknet':
+            raise ValueError(f"Direct export from {self.input_mode} to {self.output_mode} is not yet supported. Please use darknet.")
 
     def _load_darknet(self):
         """
@@ -186,12 +198,12 @@ class ExportDispatcher:
             return self.output_path, model
             
         elif self.output_mode == 'caffe':
-            export_pytorch_to_caffe(model, self.shape, self.output_path)
+            export_darknet_to_caffe(model, self.shape, self.output_path)
             log_success(f"Caffe exported to {self.output_path}")
             return self.output_path, model
             
         elif self.output_mode == 'source':
-            py_path, pth_path = export_to_source(model, self.output_path)
+            py_path, pth_path = export_darknet_to_source(model, self.output_path)
             log_success(f"Standalone code at {py_path} and weights at {pth_path}")
             return py_path, model
 
@@ -203,12 +215,9 @@ class ExportDispatcher:
         elif self.output_mode == 'onnx':
             is_ultra, _ = is_ultralytics_model(model)
             if is_ultra and self.input_mode == 'pytorch':
-                success = export_ultralytics_to_onnx(model, self.shape, self.output_path)
+                export_ultralytics_to_onnx(model, self.shape, self.output_path)
             else:
-                success = export_pytorch_to_onnx(model, self.shape, self.output_path)
-                
-            if not success:
-                raise RuntimeError("ONNX export failed.")
+                export_pytorch_to_onnx(model, self.shape, self.output_path)
                 
             log_info("Applying NPU patches...")
             final_path = optimize_onnx(self.output_path, simplify=self.simplify)

@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------
-# post_process.py
+# utils.py
 # --------------------------------------------------------------------------
 # This file is part of:
 # SushiConverter
@@ -21,50 +21,27 @@
 #
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 # EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-# IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 # CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # --------------------------------------------------------------------------
 
-import os
-import onnx
-from core.logger import log_info, log_warning, log_success
+import numpy as np
+import core.caffe_pb2 as pb
 
-def optimize_onnx(onnx_path, simplify=True):
+def numpy_to_caffe_blob(np_array):
     """
-    Applies graph optimizations and NPU patches.
-    @param onnx_path source ONNX file.
-    @param simplify apply onnx-simplifier.
-    @return path to optimized model.
+    Converts a numpy array into a Caffe BlobProto.
     """
-    TARGET_OPSET = 11
-    TARGET_IR = 7
-    
-    model = onnx.load(onnx_path)
-    
-    if simplify:
-        try:
-            from onnxsim import simplify as onnx_simplify
-            log_info("Running simplifier...")
-            model, check = onnx_simplify(model)
-        except ImportError:
-            log_warning("onnx-simplifier missing. Skipping.")
-    
-    if model.ir_version > TARGET_IR:
-        log_info(f"Lowering IR version: {model.ir_version} -> {TARGET_IR}")
-        model.ir_version = TARGET_IR
+    blob = pb.BlobProto()
+    blob.shape.dim.extend(list(np_array.shape))
+    blob.data.extend(np_array.astype(np.float32).flatten())
+    return blob
 
-    for opset_import in model.opset_import:
-        if opset_import.domain == '' or opset_import.domain == 'ai.onnx':
-            opset_import.version = TARGET_OPSET
-            
-    onnx.save(model, onnx_path)
-    
-    data_file = onnx_path + ".data"
-    if os.path.exists(data_file):
-        os.remove(data_file)
-    
-    log_success("Optimize finished.")
-    return onnx_path
+def get_nearest_weights(channels, scale):
+    """
+    Generates nearest neighbor weights for Deconvolution-based upsampling.
+    """
+    weight = np.ones((channels, 1, scale, scale), dtype=np.float32)
+    return weight

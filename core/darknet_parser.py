@@ -79,8 +79,6 @@ class YOLOLayer(nn.Module):
     """
     YOLO detection layer for coordinate decoding.
     """
-    warned = False
-
     def __init__(self, anchors, mask, classes, img_size, no_yolo_layer=False):
         super(YOLOLayer, self).__init__()
         self.anchors = torch.FloatTensor([anchors[i] for i in mask])
@@ -88,6 +86,7 @@ class YOLOLayer(nn.Module):
         self.img_size = img_size
         self.no_yolo_layer = no_yolo_layer
         self.num_anchors = len(mask)
+        self.warned = False
         self.register_buffer('anchor_grid', self.anchors.clone().view(1, self.num_anchors, 1, 1, 2))
         self.grid = None
 
@@ -99,9 +98,9 @@ class YOLOLayer(nn.Module):
         if self.no_yolo_layer:
             return x
 
-        if not YOLOLayer.warned:
+        if not self.warned:
             log_warning("Model optimized for static shapes only.")
-            YOLOLayer.warned = True
+            self.warned = True
 
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=torch.jit.TracerWarning)
@@ -265,7 +264,7 @@ class DarknetParser(nn.Module):
 
             elif block_type == 'route':
                 layers = block['layers'].split(',')
-                layers = [int(i) if int(i) >= 0 else int(i) + len(models) for i in layers]
+                layers = [int(l) if int(l) >= 0 else int(l) + len(models) for l in layers]
 
                 if 'groups' in block:
                     groups = int(block['groups'])
